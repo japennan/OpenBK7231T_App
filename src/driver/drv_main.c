@@ -17,6 +17,7 @@
 #include "drv_tuyaMCU.h"
 #include "drv_girierMCU.h"
 #include "drv_uart.h"
+#include "drv_uartBridge.h"
 #include "drv_ds1820_simple.h"
 #include "drv_ds1820_full.h"
 #include "drv_ds1820_common.h"
@@ -49,6 +50,20 @@ void GirierMCU_RunEverySecond();
 
 // startDriver BL0937
 static driver_t g_drivers[] = {
+	//drvdetail:{"name":"UARTBridge",
+	//drvdetail:"title":"UART RX to MQTT bridge",
+	//drvdetail:"descr":"Publishes complete newline-terminated lines received on the generic UART (set up with uartInit) to MQTT topic uart_rx. Pair with uartSendASCII/uartSendHex for a full Wi-Fi <-> UART command bridge to an external MCU.",
+	//drvdetail:"requires":""}
+	{ "UARTBridge",                          // Driver Name
+	UARTBridge_Init,                         // Init
+	NULL,                                    // onEverySecond
+	UARTBridge_AppendInformationToHTTPIndexPage, // appendInformationToHTTPIndexPage
+	UARTBridge_RunQuickTick,                 // runQuickTick
+	NULL,                                    // stopFunction
+	NULL,                                    // onChannelChanged
+	NULL,                                    // onHassDiscovery
+	false,                                   // loaded
+	},
 #if ENABLE_DRIVER_TUYAMCU
 	//drvdetail:{"name":"TuyaMCU",
 	//drvdetail:"title":"TODO",
