@@ -9,3 +9,7 @@
 void UARTBridge_Init(void);
 void UARTBridge_RunQuickTick(void);
 void UARTBridge_AppendInformationToHTTPIndexPage(http_request_t *request, int bPreState);
+
+// Send "cmd\r\n" on the UART and wait up to timeoutMs for the next reply line
+// (captured by this driver). Returns 1 and fills out[] on success, 0 on timeout.
+int UARTBridge_SendCommandAndWait(const char *cmd, char *out, int outSize, int timeoutMs);

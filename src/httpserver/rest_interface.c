@@ -28,6 +28,7 @@ extern uint8_t flash_size_8720;
 #include "../new_cfg.h"
 // Commands register, execution API and cmd tokenizer
 #include "../cmnds/cmd_public.h"
+#include "../driver/drv_uartBridge.h"
 
 #ifndef OBK_DISABLE_ALL_DRIVERS
 #include "../driver/drv_local.h"
@@ -100,8 +101,35 @@ bool tryGetTokenString(const char* json, jsmntok_t* tok, char* outBuffer) {
 	return true;
 }
 
+// GET /api/uartcmd?cmd=<command>
+// Sends "<command>\r\n" on the UART (set up by uartInit) and returns the next
+// reply line from the device on the other end (e.g. the WL5 PY32) as plain text,
+// or "TIMEOUT". Synchronous request/response. Requires "startDriver UARTBridge".
+static int http_rest_get_uartcmd(http_request_t* request) {
+	char cmd[128];
+	char reply[128];
+
+	http_setup(request, httpMimeTypeText);
+	if (!http_getArg(request->url, "cmd", cmd, sizeof(cmd))) {
+		poststr(request, "ERROR: missing cmd argument, use /api/uartcmd?cmd=...");
+		poststr(request, NULL);
+		return 0;
+	}
+	if (UARTBridge_SendCommandAndWait(cmd, reply, sizeof(reply), 1000)) {
+		poststr(request, reply);
+	} else {
+		poststr(request, "TIMEOUT");
+	}
+	poststr(request, NULL);
+	return 0;
+}
+
 static int http_rest_get(http_request_t* request) {
 	ADDLOG_DEBUG(LOG_FEATURE_API, "GET of %s", request->url);
+
+	if (!strncmp(request->url, "api/uartcmd", 11)) {
+		return http_rest_get_uartcmd(request);
+	}
 
 	if (!strcmp(request->url, "api/channels")) {
 		return http_rest_get_channels(request);
