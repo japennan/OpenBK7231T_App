@@ -204,9 +204,58 @@ static int http_rest_get(http_request_t* request) {
 	return 0;
 }
 
+// POST /api/py32ota  — body is a raw PY32 application image (for 0x08002000).
+// Buffers it, then drives the bootloader OTA over UART (FW:UPDATE + transfer).
+static int http_rest_post_py32ota(http_request_t* request) {
+	char msg[80];
+	int total = request->contentLength;
+	int got, n;
+	uint8_t* img;
+
+	if (total <= 0 || total > 20 * 1024) {
+		http_setup(request, httpMimeTypeText);
+		hprintf255(request, "ERR: bad Content-Length %d (max 20480)", total);
+		poststr(request, NULL);
+		return 0;
+	}
+	img = (uint8_t*)os_malloc(total);
+	if (!img) {
+		http_setup(request, httpMimeTypeText);
+		poststr(request, "ERR: out of memory");
+		poststr(request, NULL);
+		return 0;
+	}
+	/* read the whole image body first (bodystart holds the first chunk) */
+	got = 0;
+	n = request->bodylen;
+	if (n > total) n = total;
+	if (n > 0) { memcpy(img, request->bodystart, n); got = n; }
+	while (got < total) {
+		int r = recv(request->fd, (char*)img + got, total - got, 0);
+		if (r <= 0) break;
+		got += r;
+	}
+	http_setup(request, httpMimeTypeText);
+	if (got != total) {
+		os_free(img);
+		hprintf255(request, "ERR: received %d of %d bytes", got, total);
+		poststr(request, NULL);
+		return 0;
+	}
+	UARTBridge_PushFirmware(img, (uint32_t)total, msg, sizeof(msg));
+	os_free(img);
+	poststr(request, msg);
+	poststr(request, NULL);
+	return 0;
+}
+
 static int http_rest_post(http_request_t* request) {
 	char tmp[20];
 	ADDLOG_DEBUG(LOG_FEATURE_API, "POST to %s", request->url);
+
+	if (!strcmp(request->url, "api/py32ota")) {
+		return http_rest_post_py32ota(request);
+	}
 
 	if (!strcmp(request->url, "api/channels")) {
 		return http_rest_post_channels(request);

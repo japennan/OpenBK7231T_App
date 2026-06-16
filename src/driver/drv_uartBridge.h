@@ -13,3 +13,7 @@ void UARTBridge_AppendInformationToHTTPIndexPage(http_request_t *request, int bP
 // Send "cmd\r\n" on the UART and wait up to timeoutMs for the next reply line
 // (captured by this driver). Returns 1 and fills out[] on success, 0 on timeout.
 int UARTBridge_SendCommandAndWait(const char *cmd, char *out, int outSize, int timeoutMs);
+
+// Push a raw PY32 application image over UART via the bootloader OTA protocol.
+// Returns 0 on success; writes a status string to msg either way.
+int UARTBridge_PushFirmware(const uint8_t *img, uint32_t len, char *msg, int msgsz);
