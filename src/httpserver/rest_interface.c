@@ -127,22 +127,27 @@ static int http_rest_get_uartcmd(http_request_t* request) {
 	return 0;
 }
 
-// GET /wl5  — phone-friendly light control page (sliders + presets).
-// Self-contained HTML; its JS calls /api/uartcmd on this SAME host, so there is
-// no cross-origin (CORS) issue. Each unit serves this page for its own PY32
-// lights. Uses only single quotes / no backslashes so the C string literals stay
-// clean. Commands map to the PY32 protocol: W/C/B/G/R:<0..31>, ALL:n, ON, OFF,
-// CCT, IR, STATUS?.
+// GET /wl5  — phone-friendly control page with two tabs: "Valot" (lights) and
+// "Sync" (the PY32 sync-input config). Self-contained HTML; its JS calls
+// /api/uartcmd on this SAME host, so there is no cross-origin (CORS) issue. Each
+// unit serves this page for its own PY32. Uses only single quotes / no
+// backslashes so the C string literals stay clean. Commands map to the PY32
+// protocol: W/C/B/G/R:<0..31>, ALL:n, ON, OFF, CCT, IR, STATUS?, SYNC:PIN/PULL/
+// EDGE/PULSES/0/1, SYNC?, SAVE.
 static int http_rest_get_wl5(http_request_t* request) {
 	http_setup(request, httpMimeTypeHTML);
 	poststr(request,
 		"<!DOCTYPE html><html lang='fi'><head>"
 		"<meta charset='utf-8'>"
 		"<meta name='viewport' content='width=device-width,initial-scale=1'>"
-		"<title>WL5 valot</title><style>"
+		"<title>WL5</title><style>"
 		"*{box-sizing:border-box}"
 		"body{margin:0 auto;max-width:480px;padding:16px;font-family:system-ui,sans-serif;background:#111;color:#eee}"
 		"h1{font-size:1.2rem;display:flex;justify-content:space-between;align-items:center}"
+		"h2{font-size:.95rem;color:#9c9;margin:16px 0 4px}"
+		".tabs{display:flex;gap:8px;margin-bottom:14px}"
+		".tab{flex:1;padding:.6rem;border:0;border-radius:8px;background:#222;color:#aaa}"
+		".tab.act{background:#4caf50;color:#fff}"
 		".pow{font-size:.9rem;padding:.5rem 1rem;border:0;border-radius:8px;color:#fff;background:#555}"
 		".pow.on{background:#4caf50}"
 		".ch{margin:14px 0}"
@@ -150,41 +155,59 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"input[type=range]{width:100%;height:28px;accent-color:#4caf50}"
 		".presets{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}"
 		".presets button{flex:1;padding:.7rem;border:0;border-radius:8px;background:#333;color:#eee}"
+		".row{display:flex;justify-content:space-between;align-items:center;margin:10px 0}"
+		".seg{display:flex;gap:6px}"
+		".sg{padding:.4rem .7rem;border:0;border-radius:6px;background:#333;color:#ccc}"
+		".sg.act{background:#4caf50;color:#fff}"
+		"input[type=number]{width:90px;background:#222;color:#eee;border:1px solid #444;border-radius:6px;padding:.3rem}"
+		"#save{margin-top:16px;width:100%;padding:.8rem;border:0;border-radius:8px;background:#37e;color:#fff}"
 		"#stat{font-size:.75rem;color:#888;margin-top:14px;min-height:1em}"
 		"</style></head><body>");
 	poststr(request,
-		"<h1>WL5 valot <button id='pow' class='pow'>-</button></h1>"
+		"<div class='tabs'><button id='tabL' class='tab act'>Valot</button>"
+		"<button id='tabS' class='tab'>Sync</button></div>"
+		"<div id='vL'>"
+		"<h1>Valot <button id='pow' class='pow'>-</button></h1>"
 		"<div id='chs'></div>"
 		"<div class='presets'>"
 		"<button id='bFull'>Taysi</button>"
 		"<button id='bWhite'>Valkea</button>"
 		"<button id='bWarm'>Lammin</button>"
 		"<button id='bOff'>Pois</button>"
+		"</div></div>"
+		"<div id='vS' style='display:none'>"
+		"<h1>Synkronointi</h1>"
+		"<div class='row'><span>Pinni</span><span class='seg' id='gPin'></span></div>"
+		"<div class='row'><span>Pull</span><span class='seg' id='gPull'></span></div>"
+		"<div class='row'><span>Reuna</span><span class='seg' id='gEdge'></span></div>"
+		"<div class='row'><span>Pulssit</span><input type='number' id='pulses' min='0' max='65535'></div>"
+		"<h2>Skene 0 (lepo)</h2><div id='s0'></div>"
+		"<h2>Skene 1 (aktiivinen)</h2><div id='s1'></div>"
+		"<button id='save'>Tallenna pysyvasti</button>"
 		"</div><div id='stat'></div>");
 	poststr(request,
 		"<script>"
 		"var MAX=31;"
 		"var CH=[['W','W Valkoinen'],['C','C Cool'],['B','Sininen'],['G','Vihrea'],['R','Punainen']];"
-		"var powOn=true;"
-		"var chs=document.getElementById('chs');"
-		"CH.forEach(function(c){"
-		"var k=c[0],name=c[1];"
-		"var d=document.createElement('div');d.className='ch';"
-		"var lab=document.createElement('label');"
-		"var sp=document.createElement('span');sp.id='v'+k;sp.textContent='0';"
-		"lab.textContent=name+' ';lab.appendChild(sp);"
-		"var r=document.createElement('input');r.type='range';r.min='0';r.max=MAX;r.value='0';r.id='r'+k;"
-		"d.appendChild(lab);d.appendChild(r);chs.appendChild(d);"
-		"r.addEventListener('input',function(){sp.textContent=r.value;});"
-		"r.addEventListener('change',function(){send(k+':'+r.value);});"
-		"});");
-	poststr(request,
+		"var powOn=true,curTab='L',gPin,gPull,gEdge;"
 		"function setStat(t){document.getElementById('stat').textContent=t;}"
+		"function afterSend(){if(curTab==='L'){refresh();}else{syncRefresh();}}"
 		"function send(cmd){setStat('-> '+cmd);"
 		"fetch('/api/uartcmd?cmd='+encodeURIComponent(cmd),{cache:'no-store'})"
 		".then(function(r){return r.text();})"
-		".then(function(t){setStat(cmd+' -> '+t);refresh();})"
+		".then(function(t){setStat(cmd+' -> '+t);afterSend();})"
 		".catch(function(e){setStat('virhe: '+e);});}"
+		"function mkSlider(host,k,name,onCh){"
+		"var d=document.createElement('div');d.className='ch';"
+		"var lab=document.createElement('label');var sp=document.createElement('span');"
+		"sp.textContent='0';lab.textContent=name+' ';lab.appendChild(sp);"
+		"var r=document.createElement('input');r.type='range';r.min='0';r.max=MAX;r.value='0';"
+		"d.appendChild(lab);d.appendChild(r);host.appendChild(d);"
+		"r.addEventListener('input',function(){sp.textContent=r.value;});"
+		"r.addEventListener('change',onCh);return r;}");
+	poststr(request,
+		"var chs=document.getElementById('chs');"
+		"CH.forEach(function(c){var k=c[0];var r=mkSlider(chs,k,c[1],function(){send(k+':'+r.value);});r.id='r'+k;});"
 		"function togglePow(){send(powOn?'OFF':'ON');}"
 		"function refresh(){fetch('/api/uartcmd?cmd=STATUS%3F',{cache:'no-store'})"
 		".then(function(r){return r.text();}).then(applyStatus).catch(function(){});}"
@@ -192,13 +215,52 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"var p=tok.split('=');if(p.length!==2)return;var k=p[0],val=p[1];"
 		"if(k==='ON'){powOn=(val==='1');var b=document.getElementById('pow');"
 		"b.textContent=powOn?'ON':'OFF';b.className=powOn?'pow on':'pow';return;}"
-		"var r=document.getElementById('r'+k),s=document.getElementById('v'+k);"
-		"if(r){r.value=val;}if(s){s.textContent=val;}});}"
+		"var r=document.getElementById('r'+k);if(r){r.value=val;"
+		"r.previousSibling.lastChild.textContent=val;}});}"
 		"document.getElementById('pow').addEventListener('click',togglePow);"
 		"document.getElementById('bFull').addEventListener('click',function(){send('ALL:31');});"
 		"document.getElementById('bWhite').addEventListener('click',function(){send('CCT');});"
 		"document.getElementById('bWarm').addEventListener('click',function(){send('IR');});"
-		"document.getElementById('bOff').addEventListener('click',function(){send('OFF');});"
+		"document.getElementById('bOff').addEventListener('click',function(){send('OFF');});");
+	poststr(request,
+		"function seg(host,opts,fn){host.innerHTML='';opts.forEach(function(o){"
+		"var b=document.createElement('button');b.className='sg';b.textContent=o[1];b.dataset.v=o[0];"
+		"b.addEventListener('click',function(){send(fn(o[0]));});host.appendChild(b);});}"
+		"function segAct(host,v){Array.prototype.forEach.call(host.children,function(b){"
+		"b.className=(b.dataset.v===String(v))?'sg act':'sg';});}"
+		"function sendScene(host,idx){var a=[];Array.prototype.forEach.call(host.querySelectorAll('input'),"
+		"function(r){a.push(r.value);});send('SYNC:'+idx+':'+a.join(','));}"
+		"function buildScene(host,idx){CH.forEach(function(c){"
+		"mkSlider(host,c[0],c[1],function(){sendScene(host,idx);});});}"
+		"function fillScene(host,csv){var a=csv.split(',');var rows=host.children;"
+		"for(var i=0;i<rows.length&&i<a.length;i++){var r=rows[i].querySelector('input');"
+		"var s=rows[i].querySelector('span');if(r){r.value=a[i];}if(s){s.textContent=a[i];}}}");
+	poststr(request,
+		"gPin=document.getElementById('gPin');gPull=document.getElementById('gPull');gEdge=document.getElementById('gEdge');"
+		"seg(gPin,[['off','Off'],['14','PA14'],['12','PA12']],function(v){return 'SYNC:PIN:'+v;});"
+		"seg(gPull,[['none','None'],['up','Up'],['down','Down']],function(v){return 'SYNC:PULL:'+v;});"
+		"seg(gEdge,[['rising','Nouseva'],['falling','Laskeva'],['both','Molemmat']],function(v){return 'SYNC:EDGE:'+v;});"
+		"buildScene(document.getElementById('s0'),0);buildScene(document.getElementById('s1'),1);"
+		"document.getElementById('pulses').addEventListener('change',function(){send('SYNC:PULSES:'+this.value);});"
+		"document.getElementById('save').addEventListener('click',function(){send('SAVE');});"
+		"function syncRefresh(){fetch('/api/uartcmd?cmd=SYNC%3F',{cache:'no-store'})"
+		".then(function(r){return r.text();}).then(applySync).catch(function(){});}"
+		"function applySync(t){var PU={N:'none',U:'up',D:'down'},ED={R:'rising',F:'falling',B:'both'};"
+		"t.split(' ').forEach(function(tok){var p=tok.split('=');if(p.length!==2)return;var k=p[0],v=p[1];"
+		"if(k==='pin'){segAct(gPin,v==='off'?'off':v.replace('PA',''));}"
+		"else if(k==='pull'){segAct(gPull,PU[v]);}"
+		"else if(k==='edge'){segAct(gEdge,ED[v]);}"
+		"else if(k==='pulses'){document.getElementById('pulses').value=v;}"
+		"else if(k==='s0'){fillScene(document.getElementById('s0'),v);}"
+		"else if(k==='s1'){fillScene(document.getElementById('s1'),v);}});}"
+		"function showTab(x){curTab=x;var L=(x==='L');"
+		"document.getElementById('vL').style.display=L?'':'none';"
+		"document.getElementById('vS').style.display=L?'none':'';"
+		"document.getElementById('tabL').className=L?'tab act':'tab';"
+		"document.getElementById('tabS').className=L?'tab':'tab act';"
+		"if(L){refresh();}else{syncRefresh();}}"
+		"document.getElementById('tabL').addEventListener('click',function(){showTab('L');});"
+		"document.getElementById('tabS').addEventListener('click',function(){showTab('S');});"
 		"refresh();"
 		"</script></body></html>");
 	poststr(request, NULL);
