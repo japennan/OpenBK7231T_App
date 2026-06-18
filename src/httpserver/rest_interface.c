@@ -180,7 +180,7 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"<div class='row'><span>Pinni</span><span class='seg' id='gPin'></span></div>"
 		"<div class='row'><span>Pull</span><span class='seg' id='gPull'></span></div>"
 		"<div class='row'><span>Reuna</span><span class='seg' id='gEdge'></span></div>"
-		"<div class='row'><span>Pulssit</span><input type='number' id='pulses' min='0' max='65535'></div>"
+		"<div class='row'><span>Pulssit</span><input type='number' id='pulses' min='0' max='4294967295'></div>"
 		"<h2>Skene 0 (lepo)</h2><div id='s0'></div>"
 		"<h2>Skene 1 (aktiivinen)</h2><div id='s1'></div>"
 		"<button id='save'>Tallenna pysyvasti</button>"
