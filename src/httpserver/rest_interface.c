@@ -75,11 +75,14 @@ static int http_rest_get_channels(http_request_t* request);
 
 static int http_rest_post_cmd(http_request_t* request);
 
+static int http_rest_get_wl5(http_request_t* request);
+
 
 void init_rest() {
 	HTTP_RegisterCallback("/api/", HTTP_GET, http_rest_get, 1);
 	HTTP_RegisterCallback("/api/", HTTP_POST, http_rest_post, 1);
 	HTTP_RegisterCallback("/app", HTTP_GET, http_rest_app, 1);
+	HTTP_RegisterCallback("/wl5", HTTP_GET, http_rest_get_wl5, 1);
 }
 
 /* Extracts string token value into outBuffer (128 char). Returns true if the operation was successful. */
@@ -120,6 +123,84 @@ static int http_rest_get_uartcmd(http_request_t* request) {
 	} else {
 		poststr(request, "TIMEOUT");
 	}
+	poststr(request, NULL);
+	return 0;
+}
+
+// GET /wl5  — phone-friendly light control page (sliders + presets).
+// Self-contained HTML; its JS calls /api/uartcmd on this SAME host, so there is
+// no cross-origin (CORS) issue. Each unit serves this page for its own PY32
+// lights. Uses only single quotes / no backslashes so the C string literals stay
+// clean. Commands map to the PY32 protocol: W/C/B/G/R:<0..31>, ALL:n, ON, OFF,
+// CCT, IR, STATUS?.
+static int http_rest_get_wl5(http_request_t* request) {
+	http_setup(request, httpMimeTypeHTML);
+	poststr(request,
+		"<!DOCTYPE html><html lang='fi'><head>"
+		"<meta charset='utf-8'>"
+		"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+		"<title>WL5 valot</title><style>"
+		"*{box-sizing:border-box}"
+		"body{margin:0 auto;max-width:480px;padding:16px;font-family:system-ui,sans-serif;background:#111;color:#eee}"
+		"h1{font-size:1.2rem;display:flex;justify-content:space-between;align-items:center}"
+		".pow{font-size:.9rem;padding:.5rem 1rem;border:0;border-radius:8px;color:#fff;background:#555}"
+		".pow.on{background:#4caf50}"
+		".ch{margin:14px 0}"
+		".ch label{display:flex;justify-content:space-between;font-size:.95rem;margin-bottom:4px}"
+		"input[type=range]{width:100%;height:28px;accent-color:#4caf50}"
+		".presets{display:flex;gap:8px;margin-top:18px;flex-wrap:wrap}"
+		".presets button{flex:1;padding:.7rem;border:0;border-radius:8px;background:#333;color:#eee}"
+		"#stat{font-size:.75rem;color:#888;margin-top:14px;min-height:1em}"
+		"</style></head><body>");
+	poststr(request,
+		"<h1>WL5 valot <button id='pow' class='pow'>-</button></h1>"
+		"<div id='chs'></div>"
+		"<div class='presets'>"
+		"<button id='bFull'>Taysi</button>"
+		"<button id='bWhite'>Valkea</button>"
+		"<button id='bWarm'>Lammin</button>"
+		"<button id='bOff'>Pois</button>"
+		"</div><div id='stat'></div>");
+	poststr(request,
+		"<script>"
+		"var MAX=31;"
+		"var CH=[['W','W Valkoinen'],['C','C Cool'],['B','Sininen'],['G','Vihrea'],['R','Punainen']];"
+		"var powOn=true;"
+		"var chs=document.getElementById('chs');"
+		"CH.forEach(function(c){"
+		"var k=c[0],name=c[1];"
+		"var d=document.createElement('div');d.className='ch';"
+		"var lab=document.createElement('label');"
+		"var sp=document.createElement('span');sp.id='v'+k;sp.textContent='0';"
+		"lab.textContent=name+' ';lab.appendChild(sp);"
+		"var r=document.createElement('input');r.type='range';r.min='0';r.max=MAX;r.value='0';r.id='r'+k;"
+		"d.appendChild(lab);d.appendChild(r);chs.appendChild(d);"
+		"r.addEventListener('input',function(){sp.textContent=r.value;});"
+		"r.addEventListener('change',function(){send(k+':'+r.value);});"
+		"});");
+	poststr(request,
+		"function setStat(t){document.getElementById('stat').textContent=t;}"
+		"function send(cmd){setStat('-> '+cmd);"
+		"fetch('/api/uartcmd?cmd='+encodeURIComponent(cmd),{cache:'no-store'})"
+		".then(function(r){return r.text();})"
+		".then(function(t){setStat(cmd+' -> '+t);refresh();})"
+		".catch(function(e){setStat('virhe: '+e);});}"
+		"function togglePow(){send(powOn?'OFF':'ON');}"
+		"function refresh(){fetch('/api/uartcmd?cmd=STATUS%3F',{cache:'no-store'})"
+		".then(function(r){return r.text();}).then(applyStatus).catch(function(){});}"
+		"function applyStatus(t){t.split(' ').forEach(function(tok){"
+		"var p=tok.split('=');if(p.length!==2)return;var k=p[0],val=p[1];"
+		"if(k==='ON'){powOn=(val==='1');var b=document.getElementById('pow');"
+		"b.textContent=powOn?'ON':'OFF';b.className=powOn?'pow on':'pow';return;}"
+		"var r=document.getElementById('r'+k),s=document.getElementById('v'+k);"
+		"if(r){r.value=val;}if(s){s.textContent=val;}});}"
+		"document.getElementById('pow').addEventListener('click',togglePow);"
+		"document.getElementById('bFull').addEventListener('click',function(){send('ALL:31');});"
+		"document.getElementById('bWhite').addEventListener('click',function(){send('CCT');});"
+		"document.getElementById('bWarm').addEventListener('click',function(){send('IR');});"
+		"document.getElementById('bOff').addEventListener('click',function(){send('OFF');});"
+		"refresh();"
+		"</script></body></html>");
 	poststr(request, NULL);
 	return 0;
 }
