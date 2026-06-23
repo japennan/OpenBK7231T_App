@@ -168,6 +168,8 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"<button id='tabS' class='tab'>Sync</button></div>"
 		"<div id='vL'>"
 		"<h1>Valot <button id='pow' class='pow'>-</button></h1>"
+		"<div class='row'><span>Moodi</span><span class='seg' id='gMode'></span></div>"
+		"<button id='bRaw' class='sg' style='width:100%;margin-bottom:10px'>Raw (piilotettu)</button>"
 		"<div id='chs'></div>"
 		"<div class='presets'>"
 		"<button id='bFull'>Taysi</button>"
@@ -210,7 +212,7 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"CH.forEach(function(c){var k=c[0];var r=mkSlider(chs,k,c[1],function(){send(k+':'+r.value);});r.id='r'+k;});"
 		"function togglePow(){send(powOn?'OFF':'ON');}"
 		"function refresh(){fetch('/api/uartcmd?cmd=STATUS%3F',{cache:'no-store'})"
-		".then(function(r){return r.text();}).then(applyStatus).catch(function(){});}"
+		".then(function(r){return r.text();}).then(applyStatus).catch(function(){});modeRefresh();}"
 		"function applyStatus(t){t.split(' ').forEach(function(tok){"
 		"var p=tok.split('=');if(p.length!==2)return;var k=p[0],val=p[1];"
 		"if(k==='ON'){powOn=(val==='1');var b=document.getElementById('pow');"
@@ -221,7 +223,14 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"document.getElementById('bFull').addEventListener('click',function(){send('ALL:31');});"
 		"document.getElementById('bWhite').addEventListener('click',function(){send('CCT');});"
 		"document.getElementById('bWarm').addEventListener('click',function(){send('IR');});"
-		"document.getElementById('bOff').addEventListener('click',function(){send('OFF');});");
+		"document.getElementById('bOff').addEventListener('click',function(){send('OFF');});"
+		"var gMode=document.getElementById('gMode');"
+		"seg(gMode,[['single','Single'],['dualwhite','DualW'],['rgb','RGB'],['rgbw','RGBW'],['rgbcct','RGB+CCT']],function(v){return 'OUTPUT:'+v;});"
+		"document.getElementById('bRaw').addEventListener('click',function(){send('OUTPUT:raw');});"
+		"function modeRefresh(){fetch('/api/uartcmd?cmd=OUTPUT%3F',{cache:'no-store'})"
+		".then(function(r){return r.text();}).then(function(t){var m=t.split(' ')[1];"
+		"segAct(gMode,m);document.getElementById('bRaw').className=(m==='raw')?'sg act':'sg';})"
+		".catch(function(){});}");
 	poststr(request,
 		"function seg(host,opts,fn){host.innerHTML='';opts.forEach(function(o){"
 		"var b=document.createElement('button');b.className='sg';b.textContent=o[1];b.dataset.v=o[0];"
