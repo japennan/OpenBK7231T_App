@@ -76,13 +76,15 @@ static int http_rest_get_channels(http_request_t* request);
 static int http_rest_post_cmd(http_request_t* request);
 
 static int http_rest_get_wl5(http_request_t* request);
+static int http_rest_get_raw(http_request_t* request);
 
 
 void init_rest() {
 	HTTP_RegisterCallback("/api/", HTTP_GET, http_rest_get, 1);
 	HTTP_RegisterCallback("/api/", HTTP_POST, http_rest_post, 1);
 	HTTP_RegisterCallback("/app", HTTP_GET, http_rest_app, 1);
-	HTTP_RegisterCallback("/wl5", HTTP_GET, http_rest_get_wl5, 1);
+	HTTP_RegisterCallback("/wl5", HTTP_GET, http_rest_get_wl5, 1);   // MiBoxer-style app UI
+	HTTP_RegisterCallback("/raw", HTTP_GET, http_rest_get_raw, 1);   // direct channel/raw UI
 }
 
 /* Extracts string token value into outBuffer (128 char). Returns true if the operation was successful. */
@@ -127,14 +129,14 @@ static int http_rest_get_uartcmd(http_request_t* request) {
 	return 0;
 }
 
-// GET /wl5  — phone-friendly control page with two tabs: "Valot" (lights) and
-// "Sync" (the PY32 sync-input config). Self-contained HTML; its JS calls
-// /api/uartcmd on this SAME host, so there is no cross-origin (CORS) issue. Each
-// unit serves this page for its own PY32. Uses only single quotes / no
-// backslashes so the C string literals stay clean. Commands map to the PY32
-// protocol: W/C/B/G/R:<0..31>, ALL:n, ON, OFF, CCT, IR, STATUS?, SYNC:PIN/PULL/
-// EDGE/PULSES/0/1, SYNC?, SAVE.
-static int http_rest_get_wl5(http_request_t* request) {
+// GET /raw  — direct/raw control page with two tabs: "Valot" (per-channel
+// sliders, output mode, raw PWM freq, raw RF map) and "Sync" (PY32 sync-input
+// config). The MiBoxer-style perceptual UI lives at /wl5 (http_rest_get_wl5).
+// Self-contained HTML; its JS calls /api/uartcmd on this SAME host, so there is
+// no cross-origin (CORS) issue. Uses only single quotes / no backslashes so the
+// C string literals stay clean. Commands map to the PY32 protocol:
+// W/C/B/G/R:<0..31>, ALL:n, ON, OFF, CCT, IR, STATUS?, SYNC:..., SAVE.
+static int http_rest_get_raw(http_request_t* request) {
 	http_setup(request, httpMimeTypeHTML);
 	poststr(request,
 		"<!DOCTYPE html><html lang='fi'><head>"
@@ -331,6 +333,139 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"document.getElementById('tabL').addEventListener('click',function(){showTab('L');});"
 		"document.getElementById('tabS').addEventListener('click',function(){showTab('S');});"
 		"refresh();"
+		"</script></body></html>");
+	poststr(request, NULL);
+	return 0;
+}
+
+// GET /wl5  — MiBoxer-style perceptual control page. A hue ring (canvas) with a
+// centre power button, plus Saturation / Kelvin / Brightness sliders, adapting to
+// the PY32 output mode (single/dualwhite/rgb/rgbw/rgbcct). Maps to the perceptual
+// protocol: HUE:0-359, SAT:0-100, KELVIN:0-100 (0=warm,100=cool), BRI:0-100,
+// ON/OFF; reads OUTPUT?/BULB?/STATUS? on load. Self-contained, single quotes only,
+// no backslashes. The raw/channel UI lives at /raw.
+static int http_rest_get_wl5(http_request_t* request) {
+	http_setup(request, httpMimeTypeHTML);
+	poststr(request,
+		"<!DOCTYPE html><html lang='fi'><head>"
+		"<meta charset='utf-8'>"
+		"<meta name='viewport' content='width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no'>"
+		"<title>WL5</title><style>"
+		"*{box-sizing:border-box}"
+		"body{margin:0 auto;max-width:480px;padding:14px;font-family:system-ui,sans-serif;background:#fff;color:#222}"
+		"h1{font-size:1.05rem;display:flex;justify-content:space-between;align-items:center;margin:.2rem 0 .6rem}"
+		".lab{font-size:.92rem;color:#555;margin:16px 0 5px}"
+		".wrap{position:relative;width:300px;height:300px;margin:4px auto}"
+		"canvas{display:block;touch-action:none}"
+		"#pw{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:43%;height:43%;"
+		"border-radius:50%;border:0;background:#fff;box-shadow:0 1px 7px rgba(0,0,0,.28);"
+		"display:flex;align-items:center;justify-content:center;cursor:pointer}"
+		"#th{position:absolute;width:28px;height:28px;border-radius:50%;background:#fff;border:2px solid #e0e0e0;"
+		"box-shadow:0 1px 5px rgba(0,0,0,.45);transform:translate(-50%,-50%);pointer-events:none}"
+		"input[type=range]{width:100%;height:26px;-webkit-appearance:none;appearance:none;border-radius:13px;outline:0;margin:0}"
+		"input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:28px;height:28px;border-radius:50%;"
+		"background:#fff;border:1px solid #bbb;box-shadow:0 1px 4px rgba(0,0,0,.4)}"
+		"input[type=range]::-moz-range-thumb{width:26px;height:26px;border-radius:50%;background:#fff;border:1px solid #bbb}"
+		".wbtn{width:100%;padding:.85rem;border:0;border-radius:10px;background:#2196f3;color:#fff;font-size:1rem;margin-top:16px;cursor:pointer}"
+		".foot{margin-top:20px;text-align:center}.foot a{color:#999;font-size:.85rem;text-decoration:none}"
+		"#note{display:none;background:#fff3cd;color:#7a5b00;padding:.7rem;border-radius:8px;font-size:.9rem;margin:8px 0}"
+		"</style></head><body>");
+	poststr(request,
+		"<h1><span id='hl'>WL5</span>"
+		"<button id='pwTxt' style='font-size:.8rem;padding:.35rem .8rem;border:0;border-radius:7px;background:#eee;color:#333'>-</button>"
+		"</h1>"
+		"<div id='note'>Laite on raw-tilassa - perceptuaalinen ohjaus ei toimi. "
+		"<a href='/raw'>Avaa raw-sivu</a></div>"
+		"<div class='wrap' id='wrap'>"
+		"<canvas id='wh' width='300' height='300'></canvas>"
+		"<button id='pw' aria-label='power'>"
+		"<svg id='pwi' viewBox='0 0 24 24' width='40' height='40' fill='none' stroke='#e53935' stroke-width='2.4' stroke-linecap='round'>"
+		"<line x1='12' y1='3' x2='12' y2='12'/><path d='M6.4 7.1 a8 8 0 1 0 11.2 0'/></svg>"
+		"</button>"
+		"<div id='th'></div>"
+		"</div>"
+		"<div id='satRow'><div class='lab' id='sl'>Saturation</div>"
+		"<input type='range' id='eSat' min='0' max='100' value='100'></div>"
+		"<div id='kelRow'><div class='lab' id='kll'>Kelvin</div>"
+		"<input type='range' id='eKel' min='0' max='100' value='50'></div>"
+		"<div id='briRow'><div class='lab' id='bl'>Brightness</div>"
+		"<input type='range' id='eBri' min='0' max='100' value='100'></div>"
+		"<button class='wbtn' id='wbtn'>White Light</button>"
+		"<div class='foot'><a href='/raw'>Raw / lisaasetukset</a></div>");
+	poststr(request,
+		"<script>"
+		"var SZ=300,C=150,RO=144,RI=88;"
+		"var hue=0,bri=100,on=true,mode='rgbcct';"
+		// Serial request queue (OBK serializes concurrent /api/uartcmd; never overlap).
+		"var q=Promise.resolve();"
+		"function api(cmd){var p=q.then(function(){"
+		"return fetch('/api/uartcmd?cmd='+encodeURIComponent(cmd),{cache:'no-store'})"
+		".then(function(r){return r.text();});});q=p.catch(function(){});return p;}"
+		// Leading+trailing throttle per key so dragging doesn't flood the queue.
+		"var tmr={},lastc={};"
+		"function tsend(k,cmd){lastc[k]=cmd;if(tmr[k]){return;}api(cmd);"
+		"tmr[k]=setTimeout(function(){tmr[k]=null;if(lastc[k]!==cmd){api(lastc[k]);}},120);}"
+		"function $(i){return document.getElementById(i);}"
+		"var cv=$('wh'),ctx=cv.getContext('2d');"
+		"function drawRing(){ctx.clearRect(0,0,SZ,SZ);for(var a=0;a<360;a++){"
+		"var a0=(a-91.5)*Math.PI/180,a1=(a-88)*Math.PI/180;"
+		"ctx.beginPath();ctx.moveTo(C,C);ctx.arc(C,C,RO,a0,a1);ctx.closePath();"
+		"ctx.fillStyle='hsl('+a+',100%,50%)';ctx.fill();}"
+		"ctx.beginPath();ctx.arc(C,C,RI,0,6.2832);ctx.fillStyle='#fff';ctx.fill();}"
+		"function hueCol(){return 'hsl('+hue+',100%,50%)';}"
+		"function moveThumb(){var rr=(RO+RI)/2,ang=(hue-90)*Math.PI/180;"
+		"$('th').style.left=(C+rr*Math.cos(ang))+'px';$('th').style.top=(C+rr*Math.sin(ang))+'px';}"
+		"function paintSat(){$('eSat').style.background='linear-gradient(90deg,#fff,'+hueCol()+')';}"
+		"function paintBri(){$('eBri').style.background='linear-gradient(90deg,#000,#fff)';}"
+		"function paintKel(){$('eKel').style.background='linear-gradient(90deg,#ffb16e,#fff,#bcd9ff)';}"
+		"function hueLab(){$('hl').textContent='RGB:'+hue;}"
+		"function satLab(){$('sl').textContent='Saturation:'+$('eSat').value;}"
+		"function briLab(){$('bl').textContent='Brightness:'+$('eBri').value;}"
+		"function kelLab(){var k=Math.round((2700+(+$('eKel').value)*38)/100)*100;$('kll').textContent='Kelvin:'+k+'K';}"
+		"function paintPow(){$('pwi').setAttribute('stroke',on?'#e53935':'#c9c9c9');"
+		"$('pwTxt').textContent=on?'ON':'OFF';$('pwTxt').style.background=on?'#d7f0d7':'#eee';}");
+	poststr(request,
+		"function rel(e){var r=cv.getBoundingClientRect();var t=(e.touches&&e.touches[0])||e;"
+		"return{x:t.clientX-r.left-C,y:t.clientY-r.top-C};}"
+		"var drag=false;"
+		"function rdown(e){var p=rel(e);var d=Math.sqrt(p.x*p.x+p.y*p.y);"
+		"if(d<RI||d>RO+12){return;}drag=true;rmove(e);}"
+		"function rmove(e){if(!drag){return;}var p=rel(e);"
+		"var ang=Math.atan2(p.y,p.x)*180/Math.PI;hue=Math.round(ang+90+360)%360;"
+		"hueLab();moveThumb();paintSat();tsend('h','HUE:'+hue);"
+		"if(e.cancelable){e.preventDefault();}}"
+		"function rup(){drag=false;}"
+		"cv.addEventListener('mousedown',rdown);window.addEventListener('mousemove',rmove);window.addEventListener('mouseup',rup);"
+		"cv.addEventListener('touchstart',rdown,{passive:false});"
+		"cv.addEventListener('touchmove',rmove,{passive:false});cv.addEventListener('touchend',rup);"
+		"$('pw').addEventListener('click',function(){on=!on;paintPow();api(on?'ON':'OFF');});"
+		"$('pwTxt').addEventListener('click',function(){on=!on;paintPow();api(on?'ON':'OFF');});"
+		"$('eSat').addEventListener('input',function(){satLab();tsend('s','SAT:'+$('eSat').value);});"
+		"$('eKel').addEventListener('input',function(){kelLab();tsend('k','KELVIN:'+$('eKel').value);});"
+		"$('eBri').addEventListener('input',function(){bri=+$('eBri').value;briLab();tsend('b','BRI:'+$('eBri').value);});"
+		"$('wbtn').addEventListener('click',function(){api('KELVIN:'+$('eKel').value);});");
+	poststr(request,
+		"function show(id,v){$(id).style.display=v?'':'none';}"
+		"function applyMode(m){mode=m;"
+		"var raw=(m==='raw');show('note',raw);"
+		"var col=(m==='rgb'||m==='rgbw'||m==='rgbcct');"
+		"var kel=(m==='dualwhite'||m==='rgbcct');"
+		"var wl=(m==='rgbw'||m==='rgbcct');"
+		"show('wrap',col&&!raw);show('satRow',col&&!raw);show('kelRow',kel&&!raw);"
+		"show('briRow',!raw);show('wbtn',wl&&!raw);}"
+		"function parseBulb(t){t.split(' ').forEach(function(tok){var p=tok.split('=');"
+		"if(p.length!==2){return;}var k=p[0],v=+p[1];"
+		"if(k==='bri'){bri=v;$('eBri').value=v;briLab();}"
+		"else if(k==='hue'){hue=v;hueLab();moveThumb();paintSat();}"
+		"else if(k==='sat'){$('eSat').value=v;satLab();}"
+		"else if(k==='kelvin'){$('eKel').value=v;kelLab();}});}"
+		"function load(){"
+		"api('OUTPUT?').then(function(t){applyMode((t.split(' ')[1]||'rgbcct').trim());});"
+		"api('BULB?').then(parseBulb);"
+		"api('STATUS?').then(function(t){t.split(' ').forEach(function(tok){"
+		"if(tok.indexOf('ON=')===0){on=tok.slice(3)==='1';paintPow();}});});}"
+		"drawRing();moveThumb();paintSat();paintKel();paintBri();paintPow();"
+		"satLab();kelLab();briLab();hueLab();load();"
 		"</script></body></html>");
 	poststr(request, NULL);
 	return 0;
