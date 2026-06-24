@@ -207,11 +207,19 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"var CH=[['W','W Valkoinen'],['C','C Cool'],['B','Sininen'],['G','Vihrea'],['R','Punainen']];"
 		"var powOn=true,curTab='L',gPin,gPull,gEdge;"
 		"function setStat(t){document.getElementById('stat').textContent=t;}"
-		"function afterSend(){if(curTab==='L'){refresh();}else{syncRefresh();}}"
-		"function send(cmd){setStat('-> '+cmd);"
-		"fetch('/api/uartcmd?cmd='+encodeURIComponent(cmd),{cache:'no-store'})"
-		".then(function(r){return r.text();})"
-		".then(function(t){setStat(cmd+' -> '+t);afterSend();})"
+		// Serial request queue: OpenBeken serializes concurrent /api/uartcmd
+		// with escalating delay (5 in parallel ~0.1/1/3/7/15 s), so never let two
+		// overlap. q advances past failures (q=p.catch) so one error can't poison
+		// the chain; the caller still gets the real promise p.
+		"var q=Promise.resolve();"
+		"function api(cmd){var p=q.then(function(){"
+		"return fetch('/api/uartcmd?cmd='+encodeURIComponent(cmd),{cache:'no-store'})"
+		".then(function(r){return r.text();});});q=p.catch(function(){});return p;}"
+		// Default post-send refresh: light (only STATUS reflects a value/power/
+		// preset change). Controls that change other state pass their own 'after'.
+		"function defAfter(){if(curTab==='L'){statusRefresh();}else{syncRefresh();}}"
+		"function send(cmd,after){setStat('-> '+cmd);"
+		"api(cmd).then(function(t){setStat(cmd+' -> '+t);(after||defAfter)();})"
 		".catch(function(e){setStat('virhe: '+e);});}"
 		"function mkSlider(host,k,name,onCh){"
 		"var d=document.createElement('div');d.className='ch';"
@@ -225,13 +233,11 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"var chs=document.getElementById('chs');"
 		"CH.forEach(function(c){var k=c[0];var r=mkSlider(chs,k,c[1],function(){send(k+':'+r.value);});r.id='r'+k;});"
 		"function togglePow(){send(powOn?'OFF':'ON');}"
-		// Sequential chain, NOT parallel: OpenBeken serializes concurrent
-		// /api/uartcmd requests with escalating delay (5 in parallel measured
-		// at ~0.1/1/3/7/15 s), so firing these together made every button
-		// press feel like 5-15 s. Chained, the whole refresh is ~0.6 s.
-		"function refresh(){fetch('/api/uartcmd?cmd=STATUS%3F',{cache:'no-store'})"
-		".then(function(r){return r.text();}).then(applyStatus).catch(function(){})"
-		".then(modeRefresh).then(freqRefresh).then(btnRefresh).then(rawmapRefresh);}"
+		// Full refresh (tab switch to Valot / initial load). Every read goes
+		// through api() so the queue serializes them automatically — no manual
+		// chaining, and no overlap with other requests.
+		"function statusRefresh(){return api('STATUS?').then(applyStatus).catch(function(){});}"
+		"function refresh(){statusRefresh();modeRefresh();freqRefresh();btnRefresh();rawmapRefresh();}"
 		"function applyStatus(t){t.split(' ').forEach(function(tok){"
 		"var p=tok.split('=');if(p.length!==2)return;var k=p[0],val=p[1];"
 		"if(k==='ON'){powOn=(val==='1');var b=document.getElementById('pow');"
@@ -244,16 +250,17 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"document.getElementById('bWarm').addEventListener('click',function(){send('IR');});"
 		"document.getElementById('bOff').addEventListener('click',function(){send('OFF');});"
 		"var gMode=document.getElementById('gMode');"
-		"seg(gMode,[['single','Single'],['dualwhite','DualW'],['rgb','RGB'],['rgbw','RGBW'],['rgbcct','RGB+CCT']],function(v){return 'OUTPUT:'+v;});"
-		"document.getElementById('bRaw').addEventListener('click',function(){send('OUTPUT:raw');});"
+		// Mode change shifts MAX/channel count/freq — do a full refresh.
+		"seg(gMode,[['single','Single'],['dualwhite','DualW'],['rgb','RGB'],['rgbw','RGBW'],['rgbcct','RGB+CCT']],function(v){return 'OUTPUT:'+v;},refresh);"
+		"document.getElementById('bRaw').addEventListener('click',function(){send('OUTPUT:raw',refresh);});"
 		"var gBtn=document.getElementById('gBtn');"
-		"seg(gBtn,[['reset','Reset'],['mode','Moodi'],['onoff','On/off']],function(v){return 'BTN:FUNC:'+v;});"
-		"function btnRefresh(){return fetch('/api/uartcmd?cmd=BTN%3F',{cache:'no-store'})"
-		".then(function(r){return r.text();}).then(function(t){t.split(' ').forEach(function(tok){"
+		"seg(gBtn,[['reset','Reset'],['mode','Moodi'],['onoff','On/off']],function(v){return 'BTN:FUNC:'+v;},btnRefresh);"
+		"function btnRefresh(){return api('BTN?')"
+		".then(function(t){t.split(' ').forEach(function(tok){"
 		"var p=tok.split('=');if(p[0]==='FUNC'){segAct(gBtn,p[1]);}});}).catch(function(){});}"
 		"function setMax(mx){if(mx>0){MAX=mx;CH.forEach(function(c){var r=document.getElementById('r'+c[0]);if(r){r.max=MAX;}});}}"
-		"function modeRefresh(){return fetch('/api/uartcmd?cmd=OUTPUT%3F',{cache:'no-store'})"
-		".then(function(r){return r.text();}).then(function(t){var p=t.split(' ');var m=p[1];"
+		"function modeRefresh(){return api('OUTPUT?')"
+		".then(function(t){var p=t.split(' ');var m=p[1];"
 		"segAct(gMode,m);document.getElementById('bRaw').className=(m==='raw')?'sg act':'sg';"
 		"if(p[2]){setMax(parseInt(p[2].split('=')[1],10));}}).catch(function(){});}"
 		"var fSel=document.getElementById('fSel');"
@@ -261,9 +268,9 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"while((total/(pre+1))>65536){pre++;}var per=Math.round(total/(pre+1))-1;"
 		"if(per<1){per=1;}if(per>65535){per=65535;}return[per,pre];}"
 		"fSel.addEventListener('change',function(){var pp=freqToPP(parseInt(fSel.value,10));"
-		"send('FREQ:'+pp[0]+':'+pp[1]);setTimeout(function(){freqRefresh();modeRefresh();},250);});"
-		"function freqRefresh(){return fetch('/api/uartcmd?cmd=FREQ%3F',{cache:'no-store'})"
-		".then(function(r){return r.text();}).then(function(t){var v=t.split(' ')[1];if(!v){return;}"
+		"send('FREQ:'+pp[0]+':'+pp[1],function(){freqRefresh();modeRefresh();});});"
+		"function freqRefresh(){return api('FREQ?')"
+		".then(function(t){var v=t.split(' ')[1];if(!v){return;}"
 		"var a=v.split(':');var per=parseInt(a[0],10),pre=parseInt(a[1],10);"
 		"var hz=Math.round(16000000/((per+1)*(pre+1)));var steps=Math.min(per+1,256);"
 		"document.getElementById('freqHz').textContent=hz+' Hz, '+steps+' askelta';"
@@ -279,16 +286,16 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"sel.style.cssText='background:#222;color:#eee;border:1px solid #444;border-radius:6px;padding:.35rem';"
 		"[['off','-'],['W','W'],['C','C'],['B','B'],['G','G'],['R','R']].forEach(function(c){"
 		"var op=document.createElement('option');op.value=c[0];op.textContent=c[1];sel.appendChild(op);});"
-		"sel.addEventListener('change',function(){send('RAWMAP:'+role+':'+sel.value);});"
+		"sel.addEventListener('change',function(){send('RAWMAP:'+role+':'+sel.value,rawmapRefresh);});"
 		"row.appendChild(sp);row.appendChild(sel);rmap.appendChild(row);});"
-		"function rawmapRefresh(){return fetch('/api/uartcmd?cmd=RAWMAP%3F',{cache:'no-store'})"
-		".then(function(r){return r.text();}).then(function(t){t.split(' ').forEach(function(tok){"
+		"function rawmapRefresh(){return api('RAWMAP?')"
+		".then(function(t){t.split(' ').forEach(function(tok){"
 		"var p=tok.split('=');if(p.length!==2)return;var s=document.getElementById('rm_'+p[0]);"
 		"if(s){s.value=p[1];}});}).catch(function(){});}");
 	poststr(request,
-		"function seg(host,opts,fn){host.innerHTML='';opts.forEach(function(o){"
+		"function seg(host,opts,fn,after){host.innerHTML='';opts.forEach(function(o){"
 		"var b=document.createElement('button');b.className='sg';b.textContent=o[1];b.dataset.v=o[0];"
-		"b.addEventListener('click',function(){send(fn(o[0]));});host.appendChild(b);});}"
+		"b.addEventListener('click',function(){send(fn(o[0]),after);});host.appendChild(b);});}"
 		"function segAct(host,v){Array.prototype.forEach.call(host.children,function(b){"
 		"b.className=(b.dataset.v===String(v))?'sg act':'sg';});}"
 		"function sendScene(host,idx){var a=[];Array.prototype.forEach.call(host.querySelectorAll('input'),"
@@ -306,8 +313,7 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"buildScene(document.getElementById('s0'),0);buildScene(document.getElementById('s1'),1);"
 		"document.getElementById('pulses').addEventListener('change',function(){send('SYNC:PULSES:'+this.value);});"
 		"document.getElementById('save').addEventListener('click',function(){send('SAVE');});"
-		"function syncRefresh(){fetch('/api/uartcmd?cmd=SYNC%3F',{cache:'no-store'})"
-		".then(function(r){return r.text();}).then(applySync).catch(function(){});}"
+		"function syncRefresh(){return api('SYNC?').then(applySync).catch(function(){});}"
 		"function applySync(t){var PU={N:'none',U:'up',D:'down'},ED={R:'rising',F:'falling',B:'both'};"
 		"t.split(' ').forEach(function(tok){var p=tok.split('=');if(p.length!==2)return;var k=p[0],v=p[1];"
 		"if(k==='pin'){segAct(gPin,v==='off'?'off':v.replace('PA',''));}"
