@@ -225,8 +225,13 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"var chs=document.getElementById('chs');"
 		"CH.forEach(function(c){var k=c[0];var r=mkSlider(chs,k,c[1],function(){send(k+':'+r.value);});r.id='r'+k;});"
 		"function togglePow(){send(powOn?'OFF':'ON');}"
+		// Sequential chain, NOT parallel: OpenBeken serializes concurrent
+		// /api/uartcmd requests with escalating delay (5 in parallel measured
+		// at ~0.1/1/3/7/15 s), so firing these together made every button
+		// press feel like 5-15 s. Chained, the whole refresh is ~0.6 s.
 		"function refresh(){fetch('/api/uartcmd?cmd=STATUS%3F',{cache:'no-store'})"
-		".then(function(r){return r.text();}).then(applyStatus).catch(function(){});modeRefresh();freqRefresh();btnRefresh();rawmapRefresh();}"
+		".then(function(r){return r.text();}).then(applyStatus).catch(function(){})"
+		".then(modeRefresh).then(freqRefresh).then(btnRefresh).then(rawmapRefresh);}"
 		"function applyStatus(t){t.split(' ').forEach(function(tok){"
 		"var p=tok.split('=');if(p.length!==2)return;var k=p[0],val=p[1];"
 		"if(k==='ON'){powOn=(val==='1');var b=document.getElementById('pow');"
@@ -243,11 +248,11 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"document.getElementById('bRaw').addEventListener('click',function(){send('OUTPUT:raw');});"
 		"var gBtn=document.getElementById('gBtn');"
 		"seg(gBtn,[['reset','Reset'],['mode','Moodi'],['onoff','On/off']],function(v){return 'BTN:FUNC:'+v;});"
-		"function btnRefresh(){fetch('/api/uartcmd?cmd=BTN%3F',{cache:'no-store'})"
+		"function btnRefresh(){return fetch('/api/uartcmd?cmd=BTN%3F',{cache:'no-store'})"
 		".then(function(r){return r.text();}).then(function(t){t.split(' ').forEach(function(tok){"
 		"var p=tok.split('=');if(p[0]==='FUNC'){segAct(gBtn,p[1]);}});}).catch(function(){});}"
 		"function setMax(mx){if(mx>0){MAX=mx;CH.forEach(function(c){var r=document.getElementById('r'+c[0]);if(r){r.max=MAX;}});}}"
-		"function modeRefresh(){fetch('/api/uartcmd?cmd=OUTPUT%3F',{cache:'no-store'})"
+		"function modeRefresh(){return fetch('/api/uartcmd?cmd=OUTPUT%3F',{cache:'no-store'})"
 		".then(function(r){return r.text();}).then(function(t){var p=t.split(' ');var m=p[1];"
 		"segAct(gMode,m);document.getElementById('bRaw').className=(m==='raw')?'sg act':'sg';"
 		"if(p[2]){setMax(parseInt(p[2].split('=')[1],10));}}).catch(function(){});}"
@@ -257,7 +262,7 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"if(per<1){per=1;}if(per>65535){per=65535;}return[per,pre];}"
 		"fSel.addEventListener('change',function(){var pp=freqToPP(parseInt(fSel.value,10));"
 		"send('FREQ:'+pp[0]+':'+pp[1]);setTimeout(function(){freqRefresh();modeRefresh();},250);});"
-		"function freqRefresh(){fetch('/api/uartcmd?cmd=FREQ%3F',{cache:'no-store'})"
+		"function freqRefresh(){return fetch('/api/uartcmd?cmd=FREQ%3F',{cache:'no-store'})"
 		".then(function(r){return r.text();}).then(function(t){var v=t.split(' ')[1];if(!v){return;}"
 		"var a=v.split(':');var per=parseInt(a[0],10),pre=parseInt(a[1],10);"
 		"var hz=Math.round(16000000/((per+1)*(pre+1)));var steps=Math.min(per+1,256);"
@@ -276,7 +281,7 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"var op=document.createElement('option');op.value=c[0];op.textContent=c[1];sel.appendChild(op);});"
 		"sel.addEventListener('change',function(){send('RAWMAP:'+role+':'+sel.value);});"
 		"row.appendChild(sp);row.appendChild(sel);rmap.appendChild(row);});"
-		"function rawmapRefresh(){fetch('/api/uartcmd?cmd=RAWMAP%3F',{cache:'no-store'})"
+		"function rawmapRefresh(){return fetch('/api/uartcmd?cmd=RAWMAP%3F',{cache:'no-store'})"
 		".then(function(r){return r.text();}).then(function(t){t.split(' ').forEach(function(tok){"
 		"var p=tok.split('=');if(p.length!==2)return;var s=document.getElementById('rm_'+p[0]);"
 		"if(s){s.value=p[1];}});}).catch(function(){});}");
