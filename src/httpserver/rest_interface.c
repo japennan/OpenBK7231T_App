@@ -226,7 +226,7 @@ static int http_rest_get_raw(http_request_t* request) {
 		// Default post-send refresh: light (only STATUS reflects a value/power/
 		// preset change). Controls that change other state pass their own 'after'.
 		"function defAfter(){if(curTab==='L'){statusRefresh();}else{syncRefresh();}}"
-		"function send(cmd,after){setStat('-> '+cmd);"
+		"function send(cmd,after){act();setStat('-> '+cmd);"
 		"api(cmd).then(function(t){setStat(cmd+' -> '+t);(after||defAfter)();})"
 		".catch(function(e){setStat('virhe: '+e);});}"
 		"function mkSlider(host,k,name,onCh){"
@@ -250,8 +250,18 @@ static int http_rest_get_raw(http_request_t* request) {
 		"var p=tok.split('=');if(p.length!==2)return;var k=p[0],val=p[1];"
 		"if(k==='ON'){powOn=(val==='1');var b=document.getElementById('pow');"
 		"b.textContent=powOn?'ON':'OFF';b.className=powOn?'pow on':'pow';return;}"
+		"if(k==='P'){var n=parseInt(val,10);if(n!==pCur){pCur=n;paintPCur();}return;}"
 		"var r=document.getElementById('r'+k);if(r){r.value=val;"
 		"r.previousSibling.lastChild.textContent=val;}});}"
+		// Poll STATUS? (which carries ON= and P=) so the page follows the front
+		// button. Held off while hidden, off the Valot tab, while a slider has
+		// focus, and right after our own commands.
+		"var lastAct=0;"
+		"function act(){lastAct=Date.now();}"
+		"function pollTick(){if(document.hidden||curTab!=='L'||(Date.now()-lastAct)<2000){return;}"
+		"var ae=document.activeElement;if(ae&&ae.type==='range'){return;}"
+		"statusRefresh();}"
+		"setInterval(pollTick,2500);"
 		"document.getElementById('pow').addEventListener('click',togglePow);"
 		"document.getElementById('bFull').addEventListener('click',function(){send('ALL:31');});"
 		"document.getElementById('bWhite').addEventListener('click',function(){send('CCT');});"
@@ -317,16 +327,16 @@ static int http_rest_get_raw(http_request_t* request) {
 		"b2.addEventListener('click',function(){send('BTN:PSAVE:'+n,presetRefresh);});"
 		"g.appendChild(b1);g.appendChild(b2);row.appendChild(sp);row.appendChild(g);plist.appendChild(row);"
 		"})(pi);}"
+		"var pCnt=5,pCur=0;"
+		"function paintPCur(){for(var i=1;i<=5;i++){var e=document.getElementById('pv'+i);if(!e)continue;"
+		"e.style.color=(i===pCur)?'#4caf50':((i<=pCnt)?'#eee':'#666');}}"
 		"function presetRefresh(){return api('PRESET?').then(function(t){"
-		"var cnt=5,cur=0;"
 		"t.split(' ').forEach(function(tok){var p=tok.split('=');if(p.length!==2)return;"
-		"if(p[0]==='COUNT'){cnt=parseInt(p[1],10);segAct(gPn,p[1]);}"
-		"else if(p[0]==='CUR'){cur=parseInt(p[1],10);}"
+		"if(p[0]==='COUNT'){pCnt=parseInt(p[1],10);segAct(gPn,p[1]);}"
+		"else if(p[0]==='CUR'){pCur=parseInt(p[1],10);}"
 		"else if(p[0].charAt(0)==='P'){var n=parseInt(p[0].slice(1),10);"
 		"var e=document.getElementById('pv'+n);if(e){e.textContent='P'+n+'  '+p[1];}}});"
-		"for(var i=1;i<=5;i++){var e=document.getElementById('pv'+i);if(!e)continue;"
-		"e.style.color=(i===cur)?'#4caf50':((i<=cnt)?'#eee':'#666');}"
-		"}).catch(function(){});}");
+		"paintPCur();}).catch(function(){});}");
 	poststr(request,
 		"function seg(host,opts,fn,after){host.innerHTML='';opts.forEach(function(o){"
 		"var b=document.createElement('button');b.className='sg';b.textContent=o[1];b.dataset.v=o[0];"
@@ -441,7 +451,7 @@ static int http_rest_get_wl5(http_request_t* request) {
 		".then(function(r){return r.text();});});q=p.catch(function(){});return p;}"
 		// Leading+trailing throttle per key so dragging doesn't flood the queue.
 		"var tmr={},lastc={};"
-		"function tsend(k,cmd){lastc[k]=cmd;if(tmr[k]){return;}api(cmd);"
+		"function tsend(k,cmd){act();lastc[k]=cmd;if(tmr[k]){return;}api(cmd);"
 		"tmr[k]=setTimeout(function(){tmr[k]=null;if(lastc[k]!==cmd){api(lastc[k]);}},120);}"
 		"function $(i){return document.getElementById(i);}"
 		"var cv=$('wh'),ctx=cv.getContext('2d');"
@@ -476,8 +486,8 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"cv.addEventListener('mousedown',rdown);window.addEventListener('mousemove',rmove);window.addEventListener('mouseup',rup);"
 		"cv.addEventListener('touchstart',rdown,{passive:false});"
 		"cv.addEventListener('touchmove',rmove,{passive:false});cv.addEventListener('touchend',rup);"
-		"$('pw').addEventListener('click',function(){on=!on;paintPow();api(on?'ON':'OFF');});"
-		"$('pwTxt').addEventListener('click',function(){on=!on;paintPow();api(on?'ON':'OFF');});"
+		"$('pw').addEventListener('click',function(){act();on=!on;paintPow();api(on?'ON':'OFF');});"
+		"$('pwTxt').addEventListener('click',function(){act();on=!on;paintPow();api(on?'ON':'OFF');});"
 		"$('eSat').addEventListener('input',function(){satLab();tsend('s','SAT:'+$('eSat').value);});"
 		"$('eKel').addEventListener('input',function(){kelLab();tsend('k','KELVIN:'+$('eKel').value);});"
 		"$('eBri').addEventListener('input',function(){bri=+$('eBri').value;briLab();tsend('b','BRI:'+$('eBri').value);});"
@@ -501,20 +511,38 @@ static int http_rest_get_wl5(http_request_t* request) {
 		// including raw, where the rest of this page is hidden. Tapping one is
 		// BTN:PSEL (which also switches the light on); with the checkbox ticked it
 		// is BTN:PSAVE instead, storing the light as it looks right now.
-		"function presLoad(){return api('PRESET?').then(function(t){"
-		"var cnt=5,cur=0;"
-		"t.split(' ').forEach(function(tok){var p=tok.split('=');if(p.length!==2){return;}"
-		"if(p[0]==='COUNT'){cnt=parseInt(p[1],10);}else if(p[0]==='CUR'){cur=parseInt(p[1],10);}});"
-		"var h=$('pres');h.innerHTML='';"
+		"var pCur=0;"
+		"function paintPres(){Array.prototype.forEach.call($('pres').children,function(b,i){"
+		"var a=((i+1)===pCur);b.style.background=a?'#2196f3':'#eee';b.style.color=a?'#fff':'#333';});}"
+		// Rebuild only when the count changes, so a poll never yanks a button out
+		// from under a finger mid-tap.
+		"function buildPres(cnt){var h=$('pres');if(h.children.length===cnt){return;}h.innerHTML='';"
 		"for(var i=1;i<=cnt;i++){(function(n){"
 		"var b=document.createElement('button');b.textContent=n;"
 		"b.style.cssText='flex:1;min-width:52px;padding:.75rem;border:0;border-radius:10px;"
-		"font-size:1rem;cursor:pointer;'+((n===cur)?'background:#2196f3;color:#fff':'background:#eee;color:#333');"
-		"b.addEventListener('click',function(){"
+		"font-size:1rem;cursor:pointer;background:#eee;color:#333';"
+		"b.addEventListener('click',function(){act();"
 		"if($('pmode').checked){$('pmode').checked=false;api('BTN:PSAVE:'+n).then(presLoad);}"
-		"else{api('BTN:PSEL:'+n).then(function(){on=true;paintPow();presLoad();});}});"
-		"h.appendChild(b);})(i);}"
+		"else{api('BTN:PSEL:'+n).then(function(){on=true;paintPow();pCur=n;paintPres();});}});"
+		"h.appendChild(b);})(i);}}"
+		"function presLoad(){return api('PRESET?').then(function(t){"
+		"var cnt=5;"
+		"t.split(' ').forEach(function(tok){var p=tok.split('=');if(p.length!==2){return;}"
+		"if(p[0]==='COUNT'){cnt=parseInt(p[1],10);}else if(p[0]==='CUR'){pCur=parseInt(p[1],10);}});"
+		"buildPres(cnt);paintPres();"
 		"}).catch(function(){});}"
+		// Poll so the page follows the FRONT BUTTON (and any other controller).
+		// STATUS? carries both ON= and P=, so one ~90 ms query per tick is enough.
+		// Skipped while the page is hidden, while dragging the ring, and for a
+		// moment after our own commands so a reply in flight cannot fight the UI.
+		"var lastAct=0;"
+		"function act(){lastAct=Date.now();}"
+		"function live(t){t.split(' ').forEach(function(tok){var p=tok.split('=');if(p.length!==2){return;}"
+		"if(p[0]==='ON'){var v=(p[1]==='1');if(v!==on){on=v;paintPow();}}"
+		"else if(p[0]==='P'){var n=parseInt(p[1],10);if(n!==pCur){pCur=n;paintPres();}}});}"
+		"function pollTick(){if(document.hidden||drag||(Date.now()-lastAct)<1500){return;}"
+		"api('STATUS?').then(live).catch(function(){});}"
+		"setInterval(pollTick,2000);"
 		"function load(){"
 		"api('OUTPUT?').then(function(t){applyMode((t.split(' ')[1]||'rgbcct').trim());});"
 		"api('BULB?').then(parseBulb);"
