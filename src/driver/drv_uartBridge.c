@@ -11,7 +11,11 @@
 // end of the UART (e.g. the WL5's PY32) back to Wi-Fi/MQTT. Both '\r' and '\n'
 // terminate a line; empty lines (e.g. the second byte of a CRLF) are ignored.
 
-#define UB_LINE_MAX 128
+// Longest reply line carried back to /api/uartcmd; longer lines are dropped and
+// resynced on the next terminator. 128 was too small for the WL5's PRESET? reply
+// (up to ~136 bytes), which came back truncated to its tail. The UART RX ring
+// buffer behind this is 512 bytes (uartInit), so 256 fits comfortably.
+#define UB_LINE_MAX 256
 static char ub_line[UB_LINE_MAX];
 static int  ub_len = 0;
 static char ub_lastLine[UB_LINE_MAX] = "";

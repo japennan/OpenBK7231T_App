@@ -174,6 +174,12 @@ static int http_rest_get_raw(http_request_t* request) {
 		"<button id='bRaw' class='sg' style='width:100%;margin-bottom:10px'>Raw (piilotettu)</button>"
 		"<div class='row'><span>Nappi</span><span class='seg' id='gBtn'></span></div>"
 		"<div id='chs'></div>"
+		"<h2>Napin presetit</h2>"
+		"<div style='font-size:.78rem;color:#888;margin-bottom:4px'>"
+		"nappi-tila 'Preset': nopea klikkaus (alle 1 s) vaihtaa seuraavaan, tauon "
+		"jalkeen painallus sammuttaa</div>"
+		"<div class='row'><span>Maara</span><span class='seg' id='gPn'></span></div>"
+		"<div id='plist'></div>"
 		"<div class='presets'>"
 		"<button id='bFull'>Taysi</button>"
 		"<button id='bWhite'>Valkea</button>"
@@ -239,7 +245,7 @@ static int http_rest_get_raw(http_request_t* request) {
 		// through api() so the queue serializes them automatically — no manual
 		// chaining, and no overlap with other requests.
 		"function statusRefresh(){return api('STATUS?').then(applyStatus).catch(function(){});}"
-		"function refresh(){statusRefresh();modeRefresh();freqRefresh();btnRefresh();rawmapRefresh();}"
+		"function refresh(){statusRefresh();modeRefresh();freqRefresh();btnRefresh();rawmapRefresh();presetRefresh();}"
 		"function applyStatus(t){t.split(' ').forEach(function(tok){"
 		"var p=tok.split('=');if(p.length!==2)return;var k=p[0],val=p[1];"
 		"if(k==='ON'){powOn=(val==='1');var b=document.getElementById('pow');"
@@ -256,7 +262,7 @@ static int http_rest_get_raw(http_request_t* request) {
 		"seg(gMode,[['single','Single'],['dualwhite','DualW'],['rgb','RGB'],['rgbw','RGBW'],['rgbcct','RGB+CCT']],function(v){return 'OUTPUT:'+v;},refresh);"
 		"document.getElementById('bRaw').addEventListener('click',function(){send('OUTPUT:raw',refresh);});"
 		"var gBtn=document.getElementById('gBtn');"
-		"seg(gBtn,[['reset','Reset'],['mode','Moodi'],['onoff','On/off']],function(v){return 'BTN:FUNC:'+v;},btnRefresh);"
+		"seg(gBtn,[['reset','Reset'],['mode','Moodi'],['onoff','On/off'],['preset','Preset']],function(v){return 'BTN:FUNC:'+v;},btnRefresh);"
 		"function btnRefresh(){return api('BTN?')"
 		".then(function(t){t.split(' ').forEach(function(tok){"
 		"var p=tok.split('=');if(p[0]==='FUNC'){segAct(gBtn,p[1]);}});}).catch(function(){});}"
@@ -294,6 +300,33 @@ static int http_rest_get_raw(http_request_t* request) {
 		".then(function(t){t.split(' ').forEach(function(tok){"
 		"var p=tok.split('=');if(p.length!==2)return;var s=document.getElementById('rm_'+p[0]);"
 		"if(s){s.value=p[1];}});}).catch(function(){});}");
+	// Button presets: how many are in the click cycle, plus one row per preset
+	// (its channel values, "show it now" = BTN:PSEL, "store the current light"
+	// = BTN:PSAVE). The scenes come from PRESET?, not BTN? — see the WL5 repo.
+	poststr(request,
+		"var gPn=document.getElementById('gPn');"
+		"seg(gPn,[['1','1'],['2','2'],['3','3'],['4','4'],['5','5']],function(v){return 'BTN:PRESETS:'+v;},presetRefresh);"
+		"var plist=document.getElementById('plist');"
+		"for(var pi=1;pi<=5;pi++){(function(n){"
+		"var row=document.createElement('div');row.className='row';"
+		"var sp=document.createElement('span');sp.id='pv'+n;sp.style.fontSize='.88rem';sp.textContent='P'+n;"
+		"var g=document.createElement('span');g.className='seg';"
+		"var b1=document.createElement('button');b1.className='sg';b1.textContent='Nayta';"
+		"b1.addEventListener('click',function(){send('BTN:PSEL:'+n,function(){statusRefresh();presetRefresh();});});"
+		"var b2=document.createElement('button');b2.className='sg';b2.textContent='Tallenna';"
+		"b2.addEventListener('click',function(){send('BTN:PSAVE:'+n,presetRefresh);});"
+		"g.appendChild(b1);g.appendChild(b2);row.appendChild(sp);row.appendChild(g);plist.appendChild(row);"
+		"})(pi);}"
+		"function presetRefresh(){return api('PRESET?').then(function(t){"
+		"var cnt=5,cur=0;"
+		"t.split(' ').forEach(function(tok){var p=tok.split('=');if(p.length!==2)return;"
+		"if(p[0]==='COUNT'){cnt=parseInt(p[1],10);segAct(gPn,p[1]);}"
+		"else if(p[0]==='CUR'){cur=parseInt(p[1],10);}"
+		"else if(p[0].charAt(0)==='P'){var n=parseInt(p[0].slice(1),10);"
+		"var e=document.getElementById('pv'+n);if(e){e.textContent='P'+n+'  '+p[1];}}});"
+		"for(var i=1;i<=5;i++){var e=document.getElementById('pv'+i);if(!e)continue;"
+		"e.style.color=(i===cur)?'#4caf50':((i<=cnt)?'#eee':'#666');}"
+		"}).catch(function(){});}");
 	poststr(request,
 		"function seg(host,opts,fn,after){host.innerHTML='';opts.forEach(function(o){"
 		"var b=document.createElement('button');b.className='sg';b.textContent=o[1];b.dataset.v=o[0];"
@@ -391,6 +424,11 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"<div id='briRow'><div class='lab' id='bl'>Brightness</div>"
 		"<input type='range' id='eBri' min='0' max='100' value='100'></div>"
 		"<button class='wbtn' id='wbtn'>White Light</button>"
+		"<div class='lab'>Presetit</div>"
+		"<div id='pres' style='display:flex;gap:8px;flex-wrap:wrap'></div>"
+		"<label style='display:flex;align-items:center;gap:8px;margin-top:10px;font-size:.82rem;color:#666'>"
+		"<input type='checkbox' id='pmode' style='width:18px;height:18px'>"
+		"Tallenna nykyinen valo seuraavaksi painettuun presettiin</label>"
 		"<div class='foot'><a href='/raw'>Raw / lisaasetukset</a></div>");
 	poststr(request,
 		"<script>"
@@ -459,11 +497,30 @@ static int http_rest_get_wl5(http_request_t* request) {
 		"else if(k==='hue'){hue=v;hueLab();moveThumb();paintSat();}"
 		"else if(k==='sat'){$('eSat').value=v;satLab();}"
 		"else if(k==='kelvin'){$('eKel').value=v;kelLab();}});}"
+		// Presets are raw channel scenes, so they work in every output mode —
+		// including raw, where the rest of this page is hidden. Tapping one is
+		// BTN:PSEL (which also switches the light on); with the checkbox ticked it
+		// is BTN:PSAVE instead, storing the light as it looks right now.
+		"function presLoad(){return api('PRESET?').then(function(t){"
+		"var cnt=5,cur=0;"
+		"t.split(' ').forEach(function(tok){var p=tok.split('=');if(p.length!==2){return;}"
+		"if(p[0]==='COUNT'){cnt=parseInt(p[1],10);}else if(p[0]==='CUR'){cur=parseInt(p[1],10);}});"
+		"var h=$('pres');h.innerHTML='';"
+		"for(var i=1;i<=cnt;i++){(function(n){"
+		"var b=document.createElement('button');b.textContent=n;"
+		"b.style.cssText='flex:1;min-width:52px;padding:.75rem;border:0;border-radius:10px;"
+		"font-size:1rem;cursor:pointer;'+((n===cur)?'background:#2196f3;color:#fff':'background:#eee;color:#333');"
+		"b.addEventListener('click',function(){"
+		"if($('pmode').checked){$('pmode').checked=false;api('BTN:PSAVE:'+n).then(presLoad);}"
+		"else{api('BTN:PSEL:'+n).then(function(){on=true;paintPow();presLoad();});}});"
+		"h.appendChild(b);})(i);}"
+		"}).catch(function(){});}"
 		"function load(){"
 		"api('OUTPUT?').then(function(t){applyMode((t.split(' ')[1]||'rgbcct').trim());});"
 		"api('BULB?').then(parseBulb);"
 		"api('STATUS?').then(function(t){t.split(' ').forEach(function(tok){"
-		"if(tok.indexOf('ON=')===0){on=tok.slice(3)==='1';paintPow();}});});}"
+		"if(tok.indexOf('ON=')===0){on=tok.slice(3)==='1';paintPow();}});});"
+		"presLoad();}"
 		"drawRing();moveThumb();paintSat();paintKel();paintBri();paintPow();"
 		"satLab();kelLab();briLab();hueLab();load();"
 		"</script></body></html>");
